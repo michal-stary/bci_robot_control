@@ -1,13 +1,13 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "bci-robot-control"
 version = "0.1.0"
 description = "Brain-Computer Interface for Robot Control using NIRS signals"
 readme = "README.md"
-license = "Apache-2.0"
+license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
 authors = [
     { name = "Kernel" },
@@ -36,11 +36,14 @@ classifiers = [
 dependencies = [
     "numpy>=1.24.0",
     "torch>=2.0.0",
+]
+
+[project.optional-dependencies]
+holoscan = [
     "holoscan>=0.6.0",
     "kernel-sdk",
 ]
 
-[project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
@@ -61,8 +64,11 @@ bci-robot-control = "applications.robot_control:main"
 Homepage = "https://github.com/kernelco/bci_robot_control"
 Repository = "https://github.com/kernelco/bci_robot_control"
 
-[tool.hatch.build.targets.wheel]
-packages = ["applications", "operators", "streams", "models"]
+[tool.setuptools.packages.find]
+include = ["applications*", "operators*", "streams*", "models*"]
+
+[tool.setuptools.package-data]
+models = ["*.pt"]
 
 [tool.ruff]
 line-length = 100
