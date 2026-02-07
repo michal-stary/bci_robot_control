@@ -1,2 +1,4 @@
-numpy
+numpy>=1.24.0
+torch>=2.0.0
+holoscan>=0.6.0
 kernel-sdk

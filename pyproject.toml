@@ -1,0 +1,89 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bci-robot-control"
+version = "0.1.0"
+description = "Brain-Computer Interface for Robot Control using NIRS signals"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [
+    { name = "Kernel" },
+]
+keywords = [
+    "bci",
+    "brain-computer-interface",
+    "nirs",
+    "robot-control",
+    "motor-imagery",
+    "deep-learning",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+
+dependencies = [
+    "numpy>=1.24.0",
+    "torch>=2.0.0",
+    "holoscan>=0.6.0",
+    "kernel-sdk",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+
+train = [
+    "scikit-learn>=1.3.0",
+    "matplotlib>=3.7.0",
+    "huggingface-hub>=0.16.0",
+]
+
+[project.scripts]
+bci-robot-control = "applications.robot_control:main"
+
+[project.urls]
+Homepage = "https://github.com/kernelco/bci_robot_control"
+Repository = "https://github.com/kernelco/bci_robot_control"
+
+[tool.hatch.build.targets.wheel]
+packages = ["applications", "operators", "streams", "models"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # Pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
