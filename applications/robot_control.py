@@ -24,8 +24,9 @@ Uses NIRS brain signals to classify motor intent and control robot movement:
 from __future__ import annotations
 
 import argparse
+from collections import Counter, deque
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Deque, Sequence
 
 from holoscan.core import Application, ExecutionContext, InputContext, Operator, OperatorSpec, OutputContext
 
@@ -35,20 +36,62 @@ from operators.window import WindowOperator
 from streams.kernel_sdk import KernelSDKNirsStream, KernelSdkEegStream
 
 
+# Default smoothing parameters
+DEFAULT_SMOOTHING_WINDOW = 5  # Number of predictions to consider
+DEFAULT_MIN_VOTES = 3  # Minimum votes required to change action
+
+
 class RobotControlOperator(Operator):
     """
     Operator that receives inference results and controls the robot.
 
-    This operator receives motor intent classifications and translates them
-    to robot control commands.
+    This operator receives motor intent classifications, applies temporal
+    smoothing to prevent erratic behavior, and translates them to robot
+    control commands.
+
+    Smoothing: Uses majority voting over recent predictions. An action
+    change only occurs when the new action appears at least `min_votes`
+    times in the last `smoothing_window` predictions.
     """
 
-    def __init__(self, *, fragment: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        smoothing_window: int = DEFAULT_SMOOTHING_WINDOW,
+        min_votes: int = DEFAULT_MIN_VOTES,
+        fragment: Any | None = None,
+    ) -> None:
+        """
+        Initialize the robot control operator.
+
+        Args:
+            smoothing_window: Number of recent predictions to consider for voting.
+            min_votes: Minimum votes required to change action.
+            fragment: Holoscan fragment.
+        """
         super().__init__(fragment, name=self.__class__.__name__)
-        self._last_action: RobotAction = RobotAction.STOP
+        self._smoothing_window = smoothing_window
+        self._min_votes = min_votes
+        self._action_history: Deque[RobotAction] = deque(maxlen=smoothing_window)
+        self._current_action: RobotAction = RobotAction.STOP
+        self._prediction_count = 0
 
     def setup(self, spec: OperatorSpec) -> None:
         spec.input("action")
+
+    def _get_smoothed_action(self) -> tuple[RobotAction, int]:
+        """
+        Get the smoothed action using majority voting.
+
+        Returns:
+            Tuple of (most common action, vote count).
+        """
+        if not self._action_history:
+            return RobotAction.STOP, 0
+
+        votes = Counter(self._action_history)
+        most_common = votes.most_common(1)[0]
+        return most_common[0], most_common[1]
 
     def compute(
         self, op_input: InputContext, op_output: OutputContext, context: ExecutionContext
@@ -56,17 +99,32 @@ class RobotControlOperator(Operator):
         del op_output, context
 
         inference: InferenceOutput = op_input.receive("action")
+        self._prediction_count += 1
 
-        if inference.action != self._last_action:
-            self._last_action = inference.action
-            print(f"[RobotControl] ACTION CHANGED: {inference.action.value.upper()}")
+        # Add prediction to history
+        self._action_history.append(inference.action)
+
+        # Get smoothed action via majority vote
+        smoothed_action, vote_count = self._get_smoothed_action()
+
+        # Log raw vs smoothed prediction
+        print(
+            f"[RobotControl] #{self._prediction_count}: "
+            f"raw={inference.action.value} ({inference.confidence:.0%}), "
+            f"smoothed={smoothed_action.value} ({vote_count}/{len(self._action_history)} votes)"
+        )
+
+        # Only change action if we have enough votes AND it's different
+        if vote_count >= self._min_votes and smoothed_action != self._current_action:
+            self._current_action = smoothed_action
+            print(f"[RobotControl] >>> ACTION CHANGED: {smoothed_action.value.upper()} <<<")
 
             # Here you would send the actual robot control command
             # Example integration with unitree_sdk2py:
             #
-            # if inference.action == RobotAction.FORWARD:
+            # if smoothed_action == RobotAction.FORWARD:
             #     controller.set_action(Action.FORWARD)
-            # elif inference.action == RobotAction.BACKWARD:
+            # elif smoothed_action == RobotAction.BACKWARD:
             #     controller.set_action(Action.BACKWARD)
             # else:
             #     controller.set_action(Action.STOP)
@@ -87,12 +145,16 @@ class RobotControlApplication(Application):
         eeg_window_size: int = 7499,
         model_path: str | Path | None = None,
         confidence_threshold: float = 0.3,
+        smoothing_window: int = DEFAULT_SMOOTHING_WINDOW,
+        min_votes: int = DEFAULT_MIN_VOTES,
     ) -> None:
         super().__init__()
         self._nirs_window_size = nirs_window_size
         self._eeg_window_size = eeg_window_size
         self._model_path = model_path
         self._confidence_threshold = confidence_threshold
+        self._smoothing_window = smoothing_window
+        self._min_votes = min_votes
 
     def compose(self) -> Sequence[Operator]:
         fragment = self
@@ -115,8 +177,12 @@ class RobotControlApplication(Application):
             fragment=fragment,
         )
 
-        # Robot control operator
-        robot_operator = RobotControlOperator(fragment=fragment)
+        # Robot control operator with smoothing
+        robot_operator = RobotControlOperator(
+            smoothing_window=self._smoothing_window,
+            min_votes=self._min_votes,
+            fragment=fragment,
+        )
 
         # Connect the pipeline
         self.add_flow(nirs_operator, window_operator, {("samples", "nirs_samples")})
@@ -154,6 +220,18 @@ def main() -> None:
         default=7499,
         help="EEG window size in samples (default: 7499 = ~15s @ 500Hz)",
     )
+    parser.add_argument(
+        "--smoothing-window",
+        type=int,
+        default=DEFAULT_SMOOTHING_WINDOW,
+        help=f"Number of predictions for smoothing (default: {DEFAULT_SMOOTHING_WINDOW})",
+    )
+    parser.add_argument(
+        "--min-votes",
+        type=int,
+        default=DEFAULT_MIN_VOTES,
+        help=f"Minimum votes to change action (default: {DEFAULT_MIN_VOTES})",
+    )
 
     args = parser.parse_args()
 
@@ -164,11 +242,16 @@ def main() -> None:
     print(f"  Confidence threshold: {args.confidence}")
     print(f"  NIRS window: {args.nirs_window} samples")
     print(f"  EEG window: {args.eeg_window} samples")
+    print(f"  Smoothing window: {args.smoothing_window} predictions")
+    print(f"  Min votes to change: {args.min_votes}")
     print()
     print("Action mapping:")
     print("  Right Fist     -> FORWARD")
     print("  Tongue Tapping -> BACKWARD")
     print("  Other          -> STOP")
+    print()
+    print("Smoothing: Action changes when same prediction appears")
+    print(f"           {args.min_votes}+ times in last {args.smoothing_window} predictions")
     print("=" * 60)
 
     app = RobotControlApplication(
@@ -176,6 +259,8 @@ def main() -> None:
         eeg_window_size=args.eeg_window,
         model_path=args.model,
         confidence_threshold=args.confidence,
+        smoothing_window=args.smoothing_window,
+        min_votes=args.min_votes,
     )
     app.run()
 
